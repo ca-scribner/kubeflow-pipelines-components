@@ -1,0 +1,119 @@
+name: Put to MinIO
+description: Put (upload) a file or folder to MinIO
+inputs:
+- {name: source, description: 'Data (file or folder) to upload'}
+- {name: target, type: String, description: 'Destination in MinIO to put the data, in format target=<bucket>/<location_in_bucket>'}
+- {name: flags, default: '', type: String, description: 'Optional: String of flags/options passed to mc, eg: "--attr key1=value1;key2=value2 --attr key3=value3".  Default is empty (no flags)'}
+- {name: minio_url, type: URL, default: '', description: 'Optional: MinIO instance URL, starting with http://.  Leave empty to infer from environment'}
+- {name: access_key, type: String, default: '', description: 'Optional: MinIO access_key.  Leave empty to infer from environment'}
+- {name: secret_key, type: String, default: '', description: 'Optional: MinIO secret_key.  Leave empty to infer from environment'}
+- {name: tenant, default: 'standard', type: String, description: 'Name of the MinIO tenant to use.  Typically either "standard" or "premium" (must match a tenant credential file from Vault in /vault/secrets/minio-MINIO_TENANT-tanant-1).  Required only if any of minio_url, minio_access_key, or minio_secret_key are to be inferred from environment.'}
+outputs: 
+- {name: target, type: String, description: 'An echo of the input argument target (useful for chaining components in a pipeline)'}
+- {name: md5sum, type: String, description: 'A combined md5sum of all data passed to MinIO'}
+implementation:
+  container:
+    image: bash:latest  # Use bash rather than minio/mc because minio/mc does not include find
+    command:
+    - sh
+    - -e
+    - -c
+    - |
+        ######################
+        # Parse inputs
+        INPUT_MINIO_URL=$0
+        INPUT_MINIO_ACCESS_KEY=$1
+        INPUT_MINIO_SECRET_KEY=$2
+        SOURCE=$3
+        TARGET_OUTPUTPATH=$4
+        MD5SUM_OUTPUTPATH=$5
+        FLAGS=$6
+        # Use basename to protect from someone passing a nefarious path
+        MINIO_TENANT=$(basename $7)
+        TARGET=$8
+        
+        # Initialize MinIO credentials from environment provided by vault, if required
+        if [ -z "$INPUT_MINIO_URL" ] || [ -z "$INPUT_MINIO_ACCESS_KEY" ] || [ -z "$INPUT_MINIO_SECRET_KEY" ] ;
+        then
+            # Vault takes a moment to mount the secrets.  Iteratively
+            # test the secret location until they're available, up to a maximum number
+            # of iterations
+            VAULT_SLEEP_MAX_ITERATIONS=30
+            VAULT_SLEEP_TIME=2
+            VAULT_SECRET_PATH_PREFIX="/vault/secrets/minio-"
+            VAULT_SECRET_PATH_SUFFIX="-tenant-1"
+            TENANT_FILE="${VAULT_SECRET_PATH_PREFIX}${MINIO_TENANT}${VAULT_SECRET_PATH_SUFFIX}"
+            for i in $(seq 1 $VAULT_SLEEP_MAX_ITERATIONS); do
+                if [ -f "$TENANT_FILE" ] 
+                then
+                    # Sleep a tiny bit more just in case vault was half way done
+                    sleep $VAULT_SLEEP_TIME
+                    break
+                else
+                    # Sleep to wait for vault to mount secrets
+                    echo "Did not find MinIO credentials file at $TENANT_FILE.  Waiting to try again (attempt $i / $VAULT_SLEEP_MAX_ITERATIONS)"
+                    echo "--> This is expected to happen once or twice as it takes a moment for credentials to mount"
+                    sleep $VAULT_SLEEP_TIME
+                fi
+                
+                if [ $i == $VAULT_SLEEP_MAX_ITERATIONS ]
+                then
+                    echo "Could not find MinIO credentials in $TENANT_FILE.  Exiting"
+                    exit 1
+                fi
+            done
+        
+            # Update any unspecified credentials with defaults from environment
+            source $TENANT_FILE
+            MINIO_URL=${INPUT_MINIO_URL:-$MINIO_URL}
+            MINIO_ACCESS_KEY=${INPUT_MINIO_ACCESS_KEY:-$MINIO_ACCESS_KEY}
+            MINIO_SECRET_KEY=${INPUT_MINIO_SECRET_KEY:-$MINIO_SECRET_KEY}
+        
+            echo "Successfully initialized MinIO credentials"
+        fi
+
+        ######################
+        # Main
+        echo "Running using MinIO instance at $MINIO_URL"
+
+        # Create parent directories for outputs
+        mkdir -p "$(dirname "$TARGET_OUTPUTPATH")"
+        mkdir -p "$(dirname "$MD5SUM_OUTPUTPATH")"
+
+        # Install minio client
+        # TODO: Make a lightweight image that has mc and find both installed already
+        echo "Downloading MinIO mc tool"
+        MC_VERSION=mc.RELEASE.2020-10-03T02-54-56Z
+        MC_URL=https://dl.min.io/client/mc/release/linux-amd64/archive/${MC_VERSION}
+        MC_CLIENT="/tmp/mc_client"
+        wget -O "${MC_CLIENT}" "${MC_URL}"
+        chmod a+x "${MC_CLIENT}"
+        
+        echo "Configuring MinIO client"
+        $MC_CLIENT config host add my_minio $MINIO_URL $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+
+        echo "Copying data to $TARGET with FLAGS=$FLAGS"
+        $MC_CLIENT cp $FLAGS $SOURCE my_minio/$TARGET
+
+        echo "Generating outputs"
+        # target path
+        echo "$TARGET" > "$TARGET_OUTPUTPATH"
+        # md5sum of target, taking into account that we might retrieve a directory
+        # rather than a single file
+        md5=$(
+            find /tmp/test_bash_break/test2.sh -type f -print0 |
+                while read -r -d $'\0' x; do
+                md5sum $x | awk '{print $1}'; done \
+            | md5sum | awk '{print $1}'
+        )
+        echo "md5sum for data copied = $md5"
+        echo "$md5" > $MD5SUM_OUTPUTPATH
+    - {inputValue: minio_url}
+    - {inputValue: access_key}
+    - {inputValue: secret_key}
+    - {inputPath: source}
+    - {outputPath: target}  # Uses outputPath because to pass data out we dump the value of that data (the filename) into a file, then pass that file out
+    - {outputPath: md5sum}  # Uses outputPath because to pass data out we dump the value of that data (the filename) into a file, then pass that file out
+    - {inputValue: flags}
+    - {inputValue: tenant}
+    - {inputValue: target}
