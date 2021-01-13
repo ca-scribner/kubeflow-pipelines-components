@@ -98,7 +98,7 @@ implementation:
         # rather than a single file
 
         md5=$(
-            find /tmp/test_bash_break/test2.sh -type f -print0 |
+            find $TARGET_OUTPUTPATH -type f -print0 |
                 while read -r -d $'\0' x; do
                 md5sum $x | awk '{print $1}'; done \
             | md5sum | awk '{print $1}'

@@ -101,7 +101,7 @@ implementation:
         # md5sum of target, taking into account that we might retrieve a directory
         # rather than a single file
         md5=$(
-            find /tmp/test_bash_break/test2.sh -type f -print0 |
+            find $SOURCE -type f -print0 |
                 while read -r -d $'\0' x; do
                 md5sum $x | awk '{print $1}'; done \
             | md5sum | awk '{print $1}'
