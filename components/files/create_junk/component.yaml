@@ -1,0 +1,24 @@
+name: Create Junk
+description: Creates a junk file of a given size using fallocate
+inputs:
+- {name: size, description: 'The size of the file to output in fallocate -l syntax'}
+outputs: 
+- {name: data, type: String, description: 'File created'}
+implementation:
+  container:
+    image: bash:latest
+    command:
+    - sh
+    - -e
+    - -c
+    - |
+        ######################
+        # Parse inputs
+        SIZE=$0
+        TARGET_OUTPUTPATH=$1
+        
+        #####################
+        # Main
+        fallocate -l $SIZE $TARGET_OUTPUTPATH
+    - {inputValue: size}
+    - {outputPath: data}
