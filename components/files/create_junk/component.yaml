@@ -16,6 +16,7 @@ implementation:
         # Parse inputs
         SIZE=$0
         TARGET_OUTPUTPATH=$1
+        mkdir -p $(dirname $1)
         
         #####################
         # Main
